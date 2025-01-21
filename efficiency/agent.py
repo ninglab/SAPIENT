@@ -174,7 +174,7 @@ class Agent(object):
         if len(total_buffer) < 1:
             return
         else:
-            BATCH_SIZE = 1
+            BATCH_SIZE = min(BATCH_SIZE, len(total_buffer))
         total_loss = None
         for b in range(BATCH_SIZE):
             buffer = total_buffer.sample()
