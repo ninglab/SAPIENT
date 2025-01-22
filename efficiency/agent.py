@@ -173,38 +173,30 @@ class Agent(object):
     def optimize_policy_network(self, BATCH_SIZE, total_buffer):
         if len(total_buffer) < 1:
             return
-        else:
-            BATCH_SIZE = min(BATCH_SIZE, len(total_buffer))
-        total_loss = None
-        for b in range(BATCH_SIZE):
-            buffer = total_buffer.sample()
-            keys = buffer.keys()
-            sorted_traj_idx = sorted(buffer.keys(), key = lambda x: buffer[x][1])
-            sorted_traj_idx = sorted(sorted_traj_idx, key = lambda x: -buffer[x][2])
-            #save memory
-            short_traj_idx = []
-            for x in range(len(sorted_traj_idx)):
-                if x%5==0:
-                    short_traj_idx.append(sorted_traj_idx[x])
-            sorted_traj_idx = short_traj_idx
-            traj_likelihood = {}
-            idx_best = sorted_traj_idx[0]
-            best_traj_length = buffer[idx_best][1]
-            for idx in sorted_traj_idx:
-                traj_length = buffer[idx][1]
-                state_embs = self.gcn_net([x[0] for x in buffer[idx][0]][:best_traj_length])
-                action_types = torch.LongTensor([x[1] for x in buffer[idx][0]][:best_traj_length]).to(self.device)
-                traj_likelihood[idx] = torch.exp(torch.sum(torch.log(torch.gather(self.policy(state_embs).softmax(dim=-1), 1, action_types.unsqueeze(1)))))
-            loss = 1.0
-            for i in range(len(sorted_traj_idx)):
-                idx = sorted_traj_idx[i]
-                loss *= traj_likelihood[idx]
-                loss /= torch.sum(torch.stack([traj_likelihood[sorted_traj_idx[j]] for j in range(i,len(sorted_traj_idx))]))
-            if total_loss is not None:
-                total_loss += -torch.log(loss)
-            else:
-                total_loss = -torch.log(loss)
-        total_loss /= BATCH_SIZE
+        buffer = total_buffer.sample()
+        keys = buffer.keys()
+        sorted_traj_idx = sorted(buffer.keys(), key = lambda x: buffer[x][1])
+        sorted_traj_idx = sorted(sorted_traj_idx, key = lambda x: -buffer[x][2])
+        traj_likelihood = {}
+        batched_states = []
+        batched_action_types = []
+        traj_length_list = []
+        for idx in sorted_traj_idx:
+            traj_length = buffer[idx][1]
+            traj_length_list.append(traj_length)
+            batched_states.extend([x[0] for x in buffer[idx][0]])
+            batched_action_types.extend([x[1] for x in buffer[idx][0]])
+        state_embs = self.gcn_net(batched_states)
+        action_types = torch.LongTensor(batched_action_types).to(self.device)
+        temp = torch.split(torch.log(torch.gather(self.policy(state_embs).softmax(dim=-1), 1, action_types.unsqueeze(1))), traj_length_list)
+        for idx, log_likelihood in enumerate(temp):
+            traj_likelihood[sorted_traj_idx[idx]] = torch.exp(torch.sum(log_likelihood)).squeeze()
+        loss = 1.0
+        for i in range(len(sorted_traj_idx)):
+            idx = sorted_traj_idx[i]
+            loss *= traj_likelihood[idx]
+            loss /= torch.sum(torch.stack([traj_likelihood[sorted_traj_idx[j]] for j in range(i,len(sorted_traj_idx))]))
+        total_loss = -torch.log(loss)
         self.optimizer_policy_network.zero_grad()
         total_loss.backward()
         for param in self.policy.parameters():
